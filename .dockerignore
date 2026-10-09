@@ -1,0 +1,8 @@
+.git
+.env
+artifacts
+*.zip
+devtools/node_modules
+__pycache__
+*.pyc
+wager

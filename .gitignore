@@ -1,0 +1,8 @@
+.env
+artifacts/
+*.test
+coverage.out
+devtools/node_modules/
+__pycache__/
+*.pyc
+/wager

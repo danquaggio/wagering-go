@@ -1,0 +1,6 @@
+PASS: PostgreSQL schema, functions, triggers and grants applied in PGlite.
+PASS: opening updates balance atomically with version 1.
+PASS: direct balance changes, ledger mutation and terminal transitions denied.
+PASS: BET ledger drives balance and version.
+PASS: deferred constraint rejects PROCESSED without ledger.
+PASS: down migration.

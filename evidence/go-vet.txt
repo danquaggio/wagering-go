@@ -1,0 +1,3 @@
+Command: go vet -tags=integration ./...
+Exit status: 0
+No diagnostics.

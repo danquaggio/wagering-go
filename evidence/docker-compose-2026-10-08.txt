@@ -1,0 +1,39 @@
+REGISTRO DE TESTES — DOCKER COMPOSE — 08/10/2026
+Fuso de referência: America/Sao_Paulo.
+Ambiente: Windows/PowerShell, Docker Compose, pasta wagering.
+Transcrição dos trechos de saída da demonstração, da integração e dos cenários de recuperação.
+
+1. DEMONSTRAÇÃO — registro às 21:37
+Comando: docker compose --profile tools run --rm demo
+
+Carteira criada: {"id": "ca158a04-a35e-4b95-8c86-c4182ec53761", "playerId": "3b65880d-b38c-4b2f-8542-07d5d3c0e5e8", "balance": {"amount": "100.00", "currency": "BRL"}, "version": 1, "createdAt": "2026-10-09T00:36:29.050352708Z", "updatedAt": "2026-10-09T00:36:29.050352708Z"}
+Aposta 200 {"transactionId": "3f45a888-0a36-411a-9051-28d69e967708", "status": "PROCESSED", "balance": {"amount": "75.00", "currency": "BRL"}, "idempotentReplay": false}
+Replay da mesma aposta 200 {"transactionId": "3f45a888-0a36-411a-9051-28d69e967708", "status": "PROCESSED", "balance": {"amount": "75.00", "currency": "BRL"}, "idempotentReplay": true}
+Reconciliação 200 {"walletId": "ca158a04-a35e-4b95-8c86-c4182ec53761", "storedBalance": {"amount": "75.00", "currency": "BRL"}, "calculatedBalance": {"amount": "75.00", "currency": "BRL"}, "difference": {"amount": "0.00", "currency": "BRL"}, "consistent": true, "checkedEntries": 2}
+
+2. SUÍTE APÓS A CORREÇÃO — registro às 21:52
+Comando: docker compose --profile test run --rm test
+Comando configurado no serviço: go test -race -count=1 -tags=integration ./... -timeout=10m
+Trecho dos resultados, omitindo apenas as barras de progresso do Compose:
+
+?       example.com/wagering/cmd/wager  [no test files]
+?       example.com/wagering/internal/application       [no test files]
+?       example.com/wagering/internal/auth      [no test files]
+ok      example.com/wagering/internal/bootstrap 1.023s
+?       example.com/wagering/internal/config    [no test files]
+ok      example.com/wagering/internal/domain    1.022s
+?       example.com/wagering/internal/httpapi   [no test files]
+ok      example.com/wagering/internal/messaging 1.020s
+?       example.com/wagering/internal/postgres  [no test files]
+?       example.com/wagering/internal/telemetry [no test files]
+?       example.com/wagering/internal/workers   [no test files]
+ok      example.com/wagering/tests/integration  78.238s
+
+3. SIMULAÇÕES DE INTERRUPÇÃO — registro às 21:58
+Comando de reprodução: python scripts/chaos.py all
+Alternativa no Windows: py scripts/chaos.py all
+Saída registrada:
+
+PASS: commit before ACK, new process redelivered, one debit and reconciliation 75.00.
+PASS: after_outbox_claim lease recovered, stable eventId 2f5d96e5-87be-4c69-866f-97d9f340bb7b
+PASS: after_publish_before_mark lease recovered, stable eventId b25f9a0b-65b5-4361-8cf7-1c9f0976af27

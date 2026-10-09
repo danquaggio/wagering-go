@@ -1,0 +1,152 @@
+name: wagering-lab
+x-app: &app
+  build: .
+  restart: unless-stopped
+  environment: &app-env
+    HTTP_ADDR: ":8080"
+    DATABASE_URL: postgres://wager_app:${APP_DB_PASSWORD:-app_dev}@postgres:5432/wagering?sslmode=disable
+    OIDC_ISSUER: http://localhost:8081/realms/wagering
+    OIDC_JWKS_URL: http://keycloak:8080/realms/wagering/protocol/openid-connect/certs
+    OIDC_AUDIENCE: wagering-api
+    AWS_REGION: us-east-1
+    AWS_SHARED_CREDENTIALS_FILE: /run/aws/credentials
+    AWS_PROFILE: app
+    SQS_ENDPOINT: http://ministack:4566
+    PROVIDER_SIGNING_KEYS: '{"provider-a":"local-provider-a-signing-key-00000001","provider-b":"local-provider-b-signing-key-00000002"}'
+    REFERENCE_MAX_ATTEMPTS: ${REFERENCE_MAX_ATTEMPTS:-12}
+    REFERENCE_TTL: ${REFERENCE_TTL:-24h}
+    SQS_WORKERS: ${SQS_WORKERS:-4}
+  volumes: ["aws-credentials:/run/aws:ro"]
+  depends_on:
+    migrate: {condition: service_completed_successfully}
+    provision: {condition: service_completed_successfully}
+    keycloak: {condition: service_healthy}
+  stop_grace_period: 40s
+services:
+  postgres:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_DB: wagering
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres_dev}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-app_dev}
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-keycloak_dev}
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: ["postgres-data:/var/lib/postgresql/data", "./infra/postgres-init.sh:/docker-entrypoint-initdb.d/00-init.sh:ro"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d wagering"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  migrate:
+    image: postgres:17.6-alpine
+    restart: "no"
+    environment:
+      PGHOST: postgres
+      PGDATABASE: wagering
+      PGUSER: postgres
+      PGPASSWORD: ${POSTGRES_PASSWORD:-postgres_dev}
+    depends_on:
+      postgres: {condition: service_healthy}
+    volumes: ["./migrations:/migrations:ro", "./infra/migrate.sh:/migrate.sh:ro"]
+    entrypoint: ["/bin/sh", "/migrate.sh"]
+    command: ["up"]
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.4.0
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin_dev}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-keycloak_dev}
+      KC_HOSTNAME: http://localhost:8081
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
+    depends_on:
+      postgres: {condition: service_healthy}
+    ports: ["127.0.0.1:8081:8080"]
+    volumes: ["./infra/realm.json:/opt/keycloak/data/import/realm.json:ro"]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/9000; printf \"GET /health/ready HTTP/1.0\\r\\n\\r\\n\" >&3; head -1 <&3 | grep -q 200'"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+  ministack:
+    image: ministackorg/ministack:1.5.22
+    environment:
+      SERVICES: sqs,iam,sts
+      AUTH: "true"
+      PERSIST_STATE: "1"
+      STATE_DIR: /state
+      MINISTACK_HOST: ministack
+    ports: ["127.0.0.1:4566:4566"]
+    volumes: ["sqs-data:/state"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4566/_ministack/health')"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  provision:
+    image: ministackorg/ministack:1.5.22
+    restart: "no"
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://ministack:4566
+    volumes: ["./infra/provision.py:/provision.py:ro", "aws-credentials:/run/aws"]
+    entrypoint: ["python", "/provision.py"]
+    depends_on:
+      ministack: {condition: service_healthy}
+  app-1:
+    <<: *app
+    ports: ["127.0.0.1:8080:8080"]
+  app-2:
+    <<: *app
+    ports: ["127.0.0.1:8082:8080"]
+  app-3:
+    <<: *app
+    ports: ["127.0.0.1:8083:8080"]
+  test:
+    image: golang:1.26.8-bookworm
+    profiles: ["test"]
+    working_dir: /src
+    volumes: [".:/src", "gomod:/go/pkg/mod", "aws-credentials:/run/aws:ro"]
+    environment:
+      <<: *app-env
+      DATABASE_URL: postgres://wager_app:${APP_DB_PASSWORD:-app_dev}@postgres:5432/wagering?sslmode=disable
+      TEST_DATABASE_URL: postgres://wager_app:${APP_DB_PASSWORD:-app_dev}@postgres:5432/wagering?sslmode=disable
+      TEST_ADMIN_DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-postgres_dev}@postgres:5432/wagering?sslmode=disable
+      TEST_API_URLS: http://app-1:8080,http://app-2:8080,http://app-3:8080
+      TEST_TOKEN_URL: http://keycloak:8080/realms/wagering/protocol/openid-connect/token
+    depends_on:
+      app-1: {condition: service_started}
+      app-2: {condition: service_started}
+      app-3: {condition: service_started}
+    command: ["go", "test", "-race", "-count=1", "-tags=integration", "./...", "-timeout=10m"]
+  demo:
+    image: python:3.13-slim
+    profiles: ["tools"]
+    working_dir: /src
+    volumes: [".:/src"]
+    environment:
+      API_URL: http://app-1:8080
+      TOKEN_URL: http://keycloak:8080/realms/wagering/protocol/openid-connect/token
+    depends_on:
+      app-1: {condition: service_started}
+    command: ["python", "scripts/demo.py"]
+  producer:
+    image: ministackorg/ministack:1.5.22
+    profiles: ["tools"]
+    working_dir: /src
+    volumes: [".:/src", "aws-credentials:/run/aws:ro"]
+    environment:
+      AWS_SHARED_CREDENTIALS_FILE: /run/aws/credentials
+      SQS_ENDPOINT: http://ministack:4566
+    entrypoint: ["python", "scripts/send_sqs.py"]
+volumes:
+  postgres-data:
+  sqs-data:
+  aws-credentials:
+  gomod:
